@@ -1,0 +1,52 @@
+name: SA405 focused backoff acceptance
+on:
+  push:
+    branches:
+      - validation/sa405-backoff-20261004-f950
+permissions:
+  contents: read
+jobs:
+  backoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 3
+          persist-credentials: false
+      - name: Reproduce both timing boundaries and run required tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p validation-results
+          {
+            rustc --version
+            cargo --version
+            git rev-parse HEAD
+            git hash-object backend/src/webhooks/deliver.rs backend/tests/idempotency_key_test.rs backend/WEBHOOKS.md backend/Cargo.lock
+          } | tee validation-results/source.txt
+          test "$(git hash-object backend/src/webhooks/deliver.rs)" = 80024ec002e6a5a07bffa451aac6ea486cecc367
+          test "$(git hash-object backend/tests/idempotency_key_test.rs)" = 45ef8ef9cd4f61cb9d7d23c2f9dcf48bfd1c36e6
+          cp backend/src/webhooks/deliver.rs "$RUNNER_TEMP/deliver-candidate.rs"
+          git show f7f88a2cf4e38f579b1b823dc888fdae7ba7319a:backend/src/webhooks/deliver.rs > backend/src/webhooks/deliver.rs
+          set +e
+          cargo test --locked --manifest-path backend/Cargo.toml --test idempotency_key_test backoff_ -- --nocapture 2>&1 | tee validation-results/baseline.log
+          baseline_exit=${PIPESTATUS[0]}
+          set -e
+          cp "$RUNNER_TEMP/deliver-candidate.rs" backend/src/webhooks/deliver.rs
+          printf 'baseline_exit=%s\n' "$baseline_exit" | tee validation-results/outcome.txt
+          test "$baseline_exit" -eq 101
+          grep -F '0 passed; 2 failed;' validation-results/baseline.log
+          cargo test --locked --manifest-path backend/Cargo.toml --test idempotency_key_test --test tampered_payload_test -- --nocapture 2>&1 | tee validation-results/candidate.log
+          git diff --exit-code -- backend
+          printf 'required_tests_exit=0\n' | tee -a validation-results/outcome.txt
+      - name: Retain exact execution logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sa405-backoff-focused-results
+          path: validation-results/
+          retention-days: 7
