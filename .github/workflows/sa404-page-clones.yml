@@ -1,0 +1,49 @@
+name: SA404 focused pagination check
+on:
+  push:
+    branches: [cashforge/sa404-page-clones-20261004]
+permissions:
+  contents: read
+concurrency:
+  group: sa404-page-clones-20261004
+  cancel-in-progress: false
+jobs:
+  focused-page-clones:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 31a9d399d4c775308b62b94f014e252c99e2febd
+          persist-credentials: false
+          sparse-checkout: backend
+      - name: Run the one new pagination regression on exact source
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/sa404"
+          {
+            printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
+            printf 'SOURCE_BLOB=%s\n' "$(git rev-parse HEAD:backend/src/pagination/cursor.rs)"
+            rustc --version
+            cargo --version
+          } | tee "$RUNNER_TEMP/sa404/source.txt"
+          test "$(git rev-parse HEAD)" = 31a9d399d4c775308b62b94f014e252c99e2febd
+          test "$(git rev-parse HEAD:backend/src/pagination/cursor.rs)" = 7a36f46c742fa876c222fb103095f69b62f8e232
+          set +e
+          cargo test --locked --manifest-path backend/Cargo.toml --lib paginate_clones_only_returned_rows 2>&1 | tee "$RUNNER_TEMP/sa404/focused-test.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          printf 'CARGO_EXIT=%s\n' "$result" | tee "$RUNNER_TEMP/sa404/exit.txt"
+          git diff -- backend/src/pagination/cursor.rs > "$RUNNER_TEMP/sa404/source-after.diff"
+          test "$result" -eq 0
+          grep -F 'test result: ok. 1 passed; 0 failed;' "$RUNNER_TEMP/sa404/focused-test.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sa404-page-clones-31a9d399
+          path: ${{ runner.temp }}/sa404/
+          retention-days: 14
+          if-no-files-found: error
